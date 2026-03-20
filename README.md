@@ -45,6 +45,9 @@ python -m PyInstaller --onefile --noconsole --name "FScr" FScr.py
 4. Скриншот автоматически скопируется в буфер обмена
 5. Отмена по ESC или ПКМ
 
+## Добавить в автозагрузку
+
+Поместить ярлык программы в "%userprofile%\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 
 ## Системные требования
 
