@@ -1,158 +1,142 @@
-import sys
 import io
 import threading
 import time
 import os
 import ctypes
 import tkinter as tk
-
 import mss
-from PIL import Image, ImageDraw, ImageTk
+import keyboard
 import win32clipboard
 import win32con
+from PIL import Image, ImageDraw, ImageTk
 from pystray import Icon, Menu, MenuItem
-import keyboard
 
-
-def log(msg):
-    print(f'[ScreenshotTool] {msg}')
-
+# ========== НАСТРАИВАЕМЫЕ ПАРАМЕТРЫ ==========
+HOTKEY = 'ctrl+alt+s'
+CANCEL_KEYS = ['<Escape>', '<Button-3>']
+FRAME_COLOR = 'red'
+FRAME_WIDTH = 2
+MIN_CROP_SIZE = 5
+TOAST_DURATION = 1500
+TOAST_SIZE = "200x30"
+TOAST_POSITION_OFFSET = (210, 70)
+# =============================================
 
 def copy_to_clipboard(img):
     output = io.BytesIO()
     img.convert('RGB').save(output, 'BMP')
     data = output.getvalue()[14:]
-    output.close()
-    
     for _ in range(5):
         try:
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
             win32clipboard.SetClipboardData(win32con.CF_DIB, data)
             win32clipboard.CloseClipboard()
-            log('Скриншот скопирован в буфер')
-            return
+            return True
         except:
             time.sleep(0.05)
+    return False
 
-
-def show_notification(msg):
-    def popup():
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            root.after(0, lambda: root.attributes('-topmost', True))
-            sw = root.winfo_screenwidth()
-            sh = root.winfo_screenheight()
-            root.geometry(f'250x40+{sw - 260}+{sh - 80}')
-            frame = tk.Frame(root, bg='#1e1e1e', bd=1, relief='solid')
-            frame.pack(fill='both', expand=True)
-            tk.Label(frame, text=msg, bg='#1e1e1e', fg='white',
-                     font=('Segoe UI', 10), anchor='w').pack(side='left', padx=10)
-            root.after(1800, root.destroy)
-            root.mainloop()
-        except:
-            pass
-    threading.Thread(target=popup, daemon=True).start()
-
-
-def do_capture():
-    log('Захват начат')
-    try:
-        with mss.mss() as sct:
-            mon = sct.monitors[0]
-            raw = sct.grab(mon)
-        
-        screen = Image.frombytes('RGB', raw.size, raw.bgra, 'raw', 'BGRX')
-        sw, sh = raw.size
-        
+def show_toast(msg):
+    def run():
         root = tk.Tk()
         root.overrideredirect(True)
-        root.geometry(f'{sw}x{sh}+0+0')
         root.attributes('-topmost', True)
-        root.configure(bg='black')
-        root.focus_force()
-        
-        tk_img = ImageTk.PhotoImage(master=root, image=screen)
-        canvas = tk.Canvas(root, width=sw, height=sh,
-                           highlightthickness=0, cursor='cross')
-        canvas.pack()
-        canvas.create_image(0, 0, anchor='nw', image=tk_img)
-        
-        rect_id = [None]
-        sx = [0]
-        sy = [0]
-        
-        def press(e):
-            sx[0], sy[0] = e.x, e.y
-            if rect_id[0]:
-                canvas.delete(rect_id[0])
-            rect_id[0] = canvas.create_rectangle(
-                e.x, e.y, e.x, e.y, outline='red', width=2, dash=(6, 4))
-        
-        def drag(e):
-            if rect_id[0]:
-                canvas.delete(rect_id[0])
-            rect_id[0] = canvas.create_rectangle(
-                sx[0], sy[0], e.x, e.y, outline='red', width=2, dash=(6, 4))
-        
-        def release(e):
-            x1 = min(sx[0], e.x)
-            y1 = min(sy[0], e.y)
-            x2 = max(sx[0], e.x)
-            y2 = max(sy[0], e.y)
-            root.quit()
-            root.destroy()
-            if x2 - x1 > 5 and y2 - y1 > 5:
-                cropped = screen.crop((x1, y1, x2, y2))
-                copy_to_clipboard(cropped)
-                show_notification('Скриншот скопирован')
-        
-        canvas.bind('<ButtonPress-1>', press)
-        canvas.bind('<B1-Motion>', drag)
-        canvas.bind('<ButtonRelease-1>', release)
-        root.bind('<Escape>', lambda e: root.destroy())
-        root.bind('<Button-3>', lambda e: root.destroy())
-        
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        x = sw - TOAST_POSITION_OFFSET[0]
+        y = sh - TOAST_POSITION_OFFSET[1]
+        root.geometry(f'{TOAST_SIZE}+{x}+{y}')
+        tk.Label(root, text=msg, bg='#2b2b2b', fg='white').pack(fill='both', expand=True)
+        root.after(TOAST_DURATION, root.destroy)
         root.mainloop()
-    except:
-        pass
+    threading.Thread(target=run, daemon=True).start()
 
+class CaptureTool:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.root.overrideredirect(True)
+        self.root.attributes('-topmost', True)
+        self._init_capture()
 
-def on_hotkey():
-    log('Горячая клавиша нажата')
-    threading.Thread(target=do_capture, daemon=True).start()
+    def _init_capture(self):
+        with mss.mss() as sct:
+            self.mon = sct.monitors[0]
+            sct_img = sct.grab(self.mon)
+            self.screen = Image.frombytes('RGB', (self.mon['width'], self.mon['height']),
+                                        sct_img.bgra, 'raw', 'BGRX')
 
+        self.root.deiconify()
+        self.root.focus_force()
+        self.root.grab_set()
+        self.root.attributes('-topmost', True)
+        self.root.geometry(f"{self.mon['width']}x{self.mon['height']}+0+0")
+        self.root.config(cursor='cross')
 
-def on_exit(icon, item):
-    icon.stop()
-    os._exit(0)
+        self.canvas = tk.Canvas(self.root, cursor='cross', highlightthickness=0)
+        self.canvas.pack(fill='both', expand=True)
 
+        self.tk_img = ImageTk.PhotoImage(self.screen)
+        self.screen_ref = self.screen
+        self.canvas.create_image(0, 0, anchor='nw', image=self.tk_img)
+
+        self.rect = None
+        self.start_x = self.start_y = 0
+
+        self.root.bind('<ButtonPress-1>', self.on_press)
+        self.root.bind('<B1-Motion>', self.on_drag)
+        self.root.bind('<ButtonRelease-1>', self.on_release)
+
+        for key in CANCEL_KEYS:
+            self.root.bind(key, lambda e: self.root.destroy())
+
+        self.root.update_idletasks()
+        self.root.mainloop()
+
+    def on_press(self, e):
+        self.start_x, self.start_y = e.x, e.y
+        self.rect = self.canvas.create_rectangle(
+            e.x, e.y, e.x, e.y,
+            outline=FRAME_COLOR,
+            width=FRAME_WIDTH
+        )
+
+    def on_drag(self, e):
+        self.canvas.coords(self.rect, self.start_x, self.start_y, e.x, e.y)
+
+    def on_release(self, e):
+        x1, y1 = min(self.start_x, e.x), min(self.start_y, e.y)
+        x2, y2 = max(self.start_x, e.x), max(self.start_y, e.y)
+        self.root.destroy()
+        if (x2 - x1) > MIN_CROP_SIZE and (y2 - y1) > MIN_CROP_SIZE:
+            crop = self.screen.crop((x1, y1, x2, y2))
+            if copy_to_clipboard(crop):
+                show_toast("Скопировано!")
+
+def create_capture_window():
+    CaptureTool()
 
 def main():
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except:
         pass
-    
-    size = 64
-    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rectangle([8, 18, 56, 46], outline='white', width=3)
-    d.line([33, 8, 33, 18], fill='white', width=3)
-    d.line([27, 10, 39, 10], fill='white', width=3)
-    
-    icon = Icon('screenshot_tool', img, 'Screenshot Tool',
-                menu=Menu(
-                    MenuItem('Сделать скриншот', lambda _: on_hotkey()),
-                    MenuItem('Выход', on_exit),
-                ))
-    
-    keyboard.add_hotkey('ctrl+alt+s', on_hotkey)
-    log('Горячая клавиша: Ctrl+Alt+S')
-    
-    icon.run()
 
+    def run_capture():
+        threading.Thread(target=create_capture_window, daemon=True).start()
+
+    icon_img = Image.new('RGB', (64, 64), (40, 40, 40))
+    d = ImageDraw.Draw(icon_img)
+    d.rectangle([10, 10, 54, 54], outline='white', width=4)
+
+    icon = Icon('FScr', icon_img, 'FScr', menu=Menu(
+        MenuItem('Скриншот', run_capture, default=True),
+        MenuItem('Выход', lambda i, m: [i.stop(), os._exit(0)])
+    ))
+
+    keyboard.add_hotkey(HOTKEY, run_capture, suppress=True)
+    icon.run_detached()
+    keyboard.wait()
 
 if __name__ == '__main__':
     main()
