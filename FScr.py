@@ -37,23 +37,21 @@ def copy_to_clipboard(img):
             time.sleep(0.05)
     return False
 
-def show_toast(msg):
-    def run():
-        root = tk.Tk()
-        root.overrideredirect(True)
-        root.attributes('-topmost', True)
-        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-        x = sw - TOAST_POSITION_OFFSET[0]
-        y = sh - TOAST_POSITION_OFFSET[1]
-        root.geometry(f'{TOAST_SIZE}+{x}+{y}')
-        tk.Label(root, text=msg, bg='#2b2b2b', fg='white').pack(fill='both', expand=True)
-        root.after(TOAST_DURATION, root.destroy)
-        root.mainloop()
-    threading.Thread(target=run, daemon=True).start()
+def show_toast(master, msg):
+    toast = tk.Toplevel(master)
+    toast.overrideredirect(True)
+    toast.attributes('-topmost', True)
+    sw, sh = toast.winfo_screenwidth(), toast.winfo_screenheight()
+    x = sw - TOAST_POSITION_OFFSET[0]
+    y = sh - TOAST_POSITION_OFFSET[1]
+    toast.geometry(f'{TOAST_SIZE}+{x}+{y}')
+    tk.Label(toast, text=msg, bg='#2b2b2b', fg='white').pack(fill='both', expand=True)
+    toast.after(TOAST_DURATION, toast.destroy)
 
 class CaptureTool:
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, master):
+        self.master = master
+        self.root = tk.Toplevel(master)
         self.root.withdraw()
         self.root.overrideredirect(True)
         self.root.attributes('-topmost', True)
@@ -69,15 +67,12 @@ class CaptureTool:
         self.root.deiconify()
         self.root.focus_force()
         self.root.grab_set()
-        self.root.attributes('-topmost', True)
         self.root.geometry(f"{self.mon['width']}x{self.mon['height']}+0+0")
-        self.root.config(cursor='cross')
-
+        
         self.canvas = tk.Canvas(self.root, cursor='cross', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
 
         self.tk_img = ImageTk.PhotoImage(self.screen)
-        self.screen_ref = self.screen
         self.canvas.create_image(0, 0, anchor='nw', image=self.tk_img)
 
         self.rect = None
@@ -89,9 +84,6 @@ class CaptureTool:
 
         for key in CANCEL_KEYS:
             self.root.bind(key, lambda e: self.root.destroy())
-
-        self.root.update_idletasks()
-        self.root.mainloop()
 
     def on_press(self, e):
         self.start_x, self.start_y = e.x, e.y
@@ -108,13 +100,11 @@ class CaptureTool:
         x1, y1 = min(self.start_x, e.x), min(self.start_y, e.y)
         x2, y2 = max(self.start_x, e.x), max(self.start_y, e.y)
         self.root.destroy()
+        
         if (x2 - x1) > MIN_CROP_SIZE and (y2 - y1) > MIN_CROP_SIZE:
             crop = self.screen.crop((x1, y1, x2, y2))
             if copy_to_clipboard(crop):
-                show_toast("Скопировано!")
-
-def create_capture_window():
-    CaptureTool()
+                show_toast(self.master, "Скопировано!")
 
 def main():
     try:
@@ -122,21 +112,36 @@ def main():
     except:
         pass
 
-    def run_capture():
-        threading.Thread(target=create_capture_window, daemon=True).start()
+    root = tk.Tk()
+    root.withdraw()
 
+    def run_capture():
+        # Передаем задачу в главный поток GUI
+        root.after(0, lambda: CaptureTool(root))
+
+    def on_exit(icon, item):
+        icon.stop()
+        root.quit()
+        os._exit(0)
+
+    # Создание иконки трея
     icon_img = Image.new('RGB', (64, 64), (40, 40, 40))
     d = ImageDraw.Draw(icon_img)
     d.rectangle([10, 10, 54, 54], outline='white', width=4)
 
     icon = Icon('FScr', icon_img, 'FScr', menu=Menu(
         MenuItem('Скриншот', run_capture, default=True),
-        MenuItem('Выход', lambda i, m: [i.stop(), os._exit(0)])
+        MenuItem('Выход', on_exit)
     ))
 
-    keyboard.add_hotkey(HOTKEY, run_capture, suppress=True)
+    # Регистрация горячей клавиши
+    keyboard.add_hotkey(HOTKEY, run_capture)
+    
+    # Запуск трея в отдельном потоке
     icon.run_detached()
-    keyboard.wait()
+    
+    # Главный цикл Tkinter (обязателен в основном потоке)
+    root.mainloop()
 
 if __name__ == '__main__':
     main()
